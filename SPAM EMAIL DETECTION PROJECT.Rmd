@@ -1,0 +1,233 @@
+---
+title: "SPAM EMAIL DETECTION ENGINE PROJECT"
+author: "APANPS5335 Machine Learning"
+output: html_document
+---
+
+
+```{r}
+library(mlbench)
+library(e1071)
+library(caret)
+library(leaps)
+library(ISLR)
+library(glmnet)
+```
+
+### 1. Read in the data 
+
+```{r}
+readDirectory <- function(dirname) {
+      # Store the emails in a list
+      emails = list();
+      # Get a list of filenames in the directory
+      filenames = dir(dirname, full.names=TRUE);
+      for (i in 1:length(filenames)){
+            emails[[i]] = scan(filenames[i], what="", quiet=TRUE);
+      }
+      return(emails)
+}
+
+# read in data
+ham_test = readDirectory('/Users/Demi/Downloads/Machine Learning/HM4/ham-v-spam/ham-test')
+ham_train = readDirectory('/Users/Demi/Downloads/Machine Learning/HM4/ham-v-spam/ham-train')
+spam_train = readDirectory('/Users/Demi/Downloads/Machine Learning/HM4/ham-v-spam/spam-train')
+spam_test= readDirectory('/Users/Demi/Downloads/Machine Learning/HM4/ham-v-spam/spam-test')
+```
+
+### 2. Make a dictionary 
+
+```{r}
+makeSortedDictionaryDf <- function(emails){
+      # This returns a dataframe that is sorted by the number of times
+      # a word appears
+      # List of vectors to one big vetor
+      dictionaryFull <- unlist(emails)
+      # Tabulates the full dictionary
+      tabulateDic <- tabulate(factor(dictionaryFull))
+      # Find unique values
+      dictionary <- unique(dictionaryFull)
+      # Sort them alphabetically
+      dictionary <- sort(dictionary)
+      dictionaryDf <- data.frame(word = dictionary, count = tabulateDic)
+      sortDictionaryDf <- dictionaryDf[order(dictionaryDf$count,decreasing=TRUE),];
+      return(sortDictionaryDf)
+}
+
+# combine all training & testing datasets using c()
+full_emails = c(ham_test,ham_train,spam_train,spam_test)
+# make dictionary of combined data
+dic_emails = makeSortedDictionaryDf(full_emails)
+```
+
+### 3. Make a document term matrix
+```{r}
+
+makeDocumentTermMatrix <- function(emails, dictionary){
+      # This takes the email and dictionary objects from above and outputs a
+      # document term matrix
+      num_emails <- length(emails);
+      num_words <- length(dictionary$word);
+      # Instantiate a matrix where rows are documents and columns are words
+      dtm <- mat.or.vec(num_emails, num_words); # A matrix filled with zeros
+      for (i in 1:num_emails){
+            num_words_email <- length(emails[[i]]);
+            email_temp <- emails[[i]];
+            for (j in 1:num_words_email){
+                  ind <- which(dictionary$word == email_temp[j]);
+                  dtm[i, ind] <- dtm[i, ind] + 1;
+            }
+      }
+      return(dtm);
+}
+
+# document term matrix for all spam and ham training & testing data
+ham.test.dtm = makeDocumentTermMatrix(ham_test, dic_emails)
+ham.train.dtm = makeDocumentTermMatrix(ham_train, dic_emails)
+spam.train.dtm = makeDocumentTermMatrix(spam_train, dic_emails)
+spam.test.dtm = makeDocumentTermMatrix(spam_test, dic_emails)
+
+```
+
+
+### 4. Use document term matrix to compute probabilities 
+```{r}
+makeLogPvec <- function(dtm, mu){
+      # Sum up the number of instances per word
+      pvecNoMu <- colSums(dtm)
+      # Sum up number of words
+      nWords <- sum(pvecNoMu)
+      # Get dictionary size
+      dicLen <- length(pvecNoMu)
+      # Incorporate mu and normalize
+      logPvec <- log(pvecNoMu + mu) - log(mu*dicLen + nWords)
+      return(logPvec)
+} 
+
+# compute log probabilities using ham and spam training data
+mu = 1/nrow(dic_emails)
+pvec.ham.train = makeLogPvec(ham.train.dtm,mu)
+pvec.spam.train = makeLogPvec(spam.train.dtm, mu)
+
+```
+
+### 5. Create prediction function that input a new document and use probabilities to classify spam vs ham 
+
+```{r}
+predictNaiveBayes <- function(log_pvec_ham, log_pvec_spam, log_ham_prior, log_spam_prior, dtm_test) {
+   p = log_spam_prior+ sum(log_pvec_spam*dtm_test) - (log_ham_prior + sum(log_pvec_ham*dtm_test))
+   if (p > 0) {
+      return (c(1))
+   }
+   
+   if (p < 0) {
+      return(c(0))
+   }
+}
+# predict on test data
+
+pred.ham = apply(ham.test.dtm,1,function(x) {predictNaiveBayes(pvec.ham.train,pvec.spam.train,log(0.5), log(0.5),x)})
+
+pred.spam = apply(spam.test.dtm,1,function(x) {predictNaiveBayes(pvec.ham.train,pvec.spam.train,log(0.5), log(0.5),x)})
+# compute & print accuracy
+accuracy.ham = (length(pred.ham) - sum(pred.ham) ) / length(pred.ham)
+accuracy.spam = sum(pred.spam) / length(pred.spam)
+accuracy.test = round((accuracy.ham+accuracy.spam)/2,2)
+accuracy.test
+#accuracy.test= (sum(pred.ham == 0) + sum(pred.spam==1))/(length(pred.ham)+length(pred.spam))
+#accuracy.test
+```
+
+### 6. Parameter tuning 
+
+```{r}
+# find optimal mu parameter by computing testing accuracy varying mu = 1/exp(10:1)
+mu_range = 1/exp(10:1)
+i <- 1
+accuracy.test= c()
+for (mu in mu_range){
+   pvec.ham.train = makeLogPvec(ham.train.dtm,mu)
+   pvec.spam.train = makeLogPvec(spam.train.dtm, mu)
+   
+   pred.ham = apply(ham.test.dtm,1,function(x)
+      {predictNaiveBayes(pvec.ham.train,pvec.spam.train,log(0.5), log(0.5),x)})
+
+   pred.spam = apply(spam.test.dtm,1,function(x)
+      {predictNaiveBayes(pvec.ham.train,pvec.spam.train,log(0.5), log(0.5),x)})
+   
+   accuracy.ham = (length(pred.ham) - sum(pred.ham) ) / length(pred.ham)
+   accuracy.spam = sum(pred.spam) / length(pred.spam)
+   accuracy.test[i] <- (accuracy.ham+accuracy.spam)/2
+    i <- i + 1
+   accuracy.test
+}
+
+# plot mu vs testing accuracy
+accuracy.test.plot = data.frame('mu'=mu_range,'accuracy'=accuracy.test)
+library(ggplot2)
+ggplot(accuracy.test.plot, aes(x = mu, y =accuracy ))+
+   geom_line()
+# report best mu
+```
+
+According to the chart above, the best mu is `1/exp(10)`.
+
+
+### 7. Cross-validation 
+
+**7.1. A function to perform 5 fold cross-validation using only the training set. **
+
+```{r}
+fiveFoldCV <- function(dtm_ham_train, dtm_spam_train, log_ham_prior, log_spam_prior, mu){
+      # initialize an empty accuracy array
+      acc = c()
+      # split up your data into 5 sets
+      n <- nrow(dtm_ham_train)
+      fold_size <- n / 5
+      accuracy.test = c()
+      for (i in 1:5) {
+            
+            # train on the train_range using makeLogPvec()
+         pvec.ham.train = makeLogPvec(dtm_ham_train[-((fold_size*(i-1)):(fold_size*i)),],mu)
+         pvec.spam.train = makeLogPvec(dtm_spam_train[-((fold_size*(i-1)):(fold_size*i)),], mu)
+            # validate on the validation_range using predictNaiveBayes()
+         pred.ham = apply(dtm_ham_train[((fold_size*(i-1)):(fold_size*i)),],1,function(x){predictNaiveBayes(pvec.ham.train,pvec.spam.train,log_ham_prior, log_spam_prior,x)})
+         pred.spam = apply(dtm_spam_train[((fold_size*(i-1)):(fold_size*i)),],1,function(x){predictNaiveBayes(pvec.ham.train,pvec.spam.train,log_ham_prior, log_spam_prior,x)})
+      # return the average accuracy over all folds
+         accuracy.ham = (length(pred.ham) - sum(pred.ham) ) / length(pred.ham)
+         accuracy.spam = sum(pred.spam) / length(pred.spam)
+         accuracy.test[i] <- (accuracy.ham+accuracy.spam)/2
+         accuracy.test
+}
+      # your code here
+      return(mean(accuracy.test))
+}
+```
+
+**7.2 Vary mu = 1/exp(10:1) and compute the average cross-validation accuracy for each mu. **
+```{r}
+# cross-validation accuracy
+mu_range = 1/exp(10:1)
+avg.acc = c()
+i=1
+for (mu in mu_range){
+   avg.acc[i] = fiveFoldCV(ham.train.dtm,spam.train.dtm,log(0.5), log(0.5),mu)
+   i=i+1
+   avg.acc
+}
+
+```
+
+**7.3 Plot mu vs accuracy and report the best mu **
+```{r}
+# plot mu vs accuracy
+accuracy.test.plot['avg.acc'] = avg.acc
+# print best mu
+
+ggplot(accuracy.test.plot, aes(x=mu, y = avg.acc)) + 
+  geom_line() 
+
+```
+
+After cross validation: according to the chart above, the best mu is `1/exp(9)`.
+
